@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Streamlit
+.streamlit/
+
+# Fichiers locaux
+.env
+distance_cache.sqlite
+outputs/
+
+# Mac
+.DS_Store
