@@ -1,34 +1,244 @@
-# src/extract_tgv_local.py
 import io
 import re
-from typing import Optional, List
+import unicodedata
+from typing import Optional, List, Tuple
 
 import pdfplumber
 
-from pdf_text import pdf_to_text  # si tu ne l'utilises plus, tu peux le retirer
 from schemas import RidesExtraction, RideRow
 from routes import geocode_place, haversine_km
 
 # ---- Patterns généraux -----------------------------------------------------
 
+PATTERN_LINE_TIME = re.compile(r"^\s*(\d{1,2}[hH]\d{2}|\d{1,2}:\d{2})\b")
 PATTERN_TIME = re.compile(r"\b(\d{1,2}[hH]\d{2}|\d{1,2}:\d{2})\b")
+
 PATTERN_DATE = re.compile(
-    r"(?:Lundi|Mardi|Mercredi|Jeudi|Vendredi|Samedi|Dimanche)?\s*\d{1,2}\s+[A-Za-zéûâîôùàèêëïöüç\-]+?\s+\d{4}",
+    r"(?:Lundi|Mardi|Mercredi|Jeudi|Vendredi|Samedi|Dimanche)?\s*\d{1,2}\s+[A-Za-zÉÈÊËÀÂÄÎÏÔÖÙÛÜŸéèêëàâäîïôöùûüç\-]+?\s+\d{4}",
     flags=re.IGNORECASE,
 )
 
-# Mots-clés qu'on NE veut pas prendre comme gares
-STOP_CONTAINS = [
-    "VOITURE", "PLACE", "BAS", "DUO", "CÔTÉ", "COTE", "CLASSE", "TGV", "INOUI",
-    "TER", "INTERCIT", "MON BILLET", "ITINÉRAIRE", "ITINERAIRE", "BON À SAVOIR",
-    "PRÊTS", "EMBARQUEZ", "TOURISME", "AFFAIRES", "FCE", "DOSSIER", "VOYAGE",
+PATTERN_LABEL_ROUTE = re.compile(
+    r"^\s*(.+?)\s*>\s*(.+?)\s*(?:\d{1,3}(?:[.,]\d{2})?\s*(?:€|EUR))?\s*$",
+    flags=re.IGNORECASE,
+)
+
+PATTERN_STATION_DATETIME = re.compile(
+    r"^\s*(.+?)\s+\d{1,2}/\d{1,2}\s+[àa]\s+\d{1,2}h\d{2}\s*$",
+    flags=re.IGNORECASE,
+)
+
+STOP_TOKENS = {
+    "VOITURE",
+    "PLACE",
+    "BAS",
+    "HAUT",
+    "DUO",
+    "COTE",
+    "CÔTÉ",
+    "CLASSE",
+    "TGV",
+    "INOUI",
+    "TER",
+    "INTERCIT",
+    "INTERCITES",
+    "INTERCITÉS",
+    "BILLET",
+    "ITINERAIRE",
+    "ITINÉRAIRE",
+    "BON",
+    "SAVOIR",
+    "PRETS",
+    "PRÊTS",
+    "EMBARQUEZ",
+    "TOURISME",
+    "AFFAIRES",
+    "FCE",
+    "DOSSIER",
+    "VOYAGE",
+    "FLEXIBLE",
+    "SECONDE",
+    "PREMIERE",
+    "PREMIÈRE",
+    "ADULTE",
+    "ALLER",
+    "SIMPLE",
+    "OPERE",
+    "OPÉRÉ",
+    "SIEGE",
+    "SIÈGE",
+    "SALLE",
+    "PAIEMENT",
+    "ACHETE",
+    "ACHETÉ",
+    "DISTANCE",
+    "KM",
+    "TCN",
+    "PAO",
+    "STANDARD",
+    "TARIF",
+    "REMISE",
+    "REMISÉ",
+    "PRO",
+    "NORMAL",
+    "GRANDE",
+    "VITESSE",
+    "TRAIN",
+    "BAGAGE",
+    "BAGAGES",
+    "OBJETS",
+    "INTERDITS",
+    "PERSONNE",
+    "INCLUS",
+    "MODELE",
+    "MODÈLE",
+    "TYPE",
+    "PLUS",
+    "OUIFI",
+    "OUIFUN",
+    "RESERVATION",
+    "RÉSERVATION",
+    "CLUB",
+    "QUATRE",
+    "VIA",
+}
+
+NOISE_PATTERNS = [
+    "FLEXIBLE",
+    "SECONDE",
+    "PREMIERE",
+    "PREMIÈRE",
+    "BILLET",
+    "ALLER",
+    "SIMPLE",
+    "ADULTE",
+    "ITINÉRAIRE",
+    "ITINERAIRE",
+    "CLASSE",
+    "OPÉRÉ",
+    "OPERE",
+    "VOITURE",
+    "PLACE",
+    "SALLE",
+    "SIÈGE",
+    "SIEGE",
+    "LE TOURISME",
+    "PARADOX VOYAGES",
+    "FCE",
+    "PAO",
+    "TCN",
+    "MOYEN",
+    "PAIEMENT",
+    "ACHETÉ",
+    "ACHETE",
+    "DISTANCE",
+    "PRÊTS",
+    "PRETS",
+    "EMBARQUEZ",
+    "Acheté via l'agence",
+    "Prix du billet",
+    "Voyageur",
+    "Dossier voyage",
+    "Nom :",
+    "Prénom :",
+    "Grande Vitesse train",
+    "BAGAGES INCLUS",
+    "OBJETS INTERDITS",
+    "VOYAGEURS, OPTIONS ET TYPE DE PLACE",
+    "Mes essentiels pour un voyage réussi",
+    "Total voyageur",
+    "réservation",
+    "reservation",
+    "OUIGO PLUS",
+    "Club Quatre",
+    "Club Duo",
+    "Place prioritaire",
+    "Départ / Arrivée",
+    "Date / Heure",
+    "TGV LYRIA",
 ]
+
+STATION_HINTS = {
+    "GARE",
+    "LYON",
+    "PARIS",
+    "AUSTERLITZ",
+    "LAZARE",
+    "DIEU",
+    "PERRACHE",
+    "PART",
+    "BRIVE",
+    "GAILLARDE",
+    "VIVIEZ",
+    "DECAZEVILLE",
+    "LISON",
+    "SAINT",
+    "SAINTE",
+    "DIJON",
+    "VILLE",
+    "AEROPORT",
+    "AÉROPORT",
+    "BOURGES",
+    "MONTLUCON",
+    "VALENCE",
+    "RHONE",
+    "RHÔNE",
+    "ALPES",
+    "SUD",
+}
 
 
 # ---- Helpers ---------------------------------------------------------------
 
+def _strip_accents(s: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFD", s or "")
+        if unicodedata.category(c) != "Mn"
+    )
+
+
+def _normalize_text(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip())
+
+
+def _tokenize_upper(s: str) -> List[str]:
+    up = _strip_accents((s or "").upper())
+    return [t for t in re.split(r"[^A-Z]+", up) if t]
+
+
+def _contains_stop_token(s: str) -> bool:
+    tokens = set(_tokenize_upper(s))
+    return any(tok in STOP_TOKENS for tok in tokens)
+
+
+def _clean_station_candidate(s: str) -> str:
+    s = _normalize_text(s)
+
+    s = re.sub(r"PR[ÊE]TS\s*\?\s*EMBARQUEZ\s*!.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"PR[ÊE]TS.*$", "", s, flags=re.IGNORECASE)
+
+    s = re.sub(r"\bPrix\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bDistance\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bAchet[ée]\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bVoyageur\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bDossier\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bNom\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bPr[ée]nom\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bGrande Vitesse train\b.*$", "", s, flags=re.IGNORECASE)
+
+    s = re.sub(r"\d{1,3}(?:[.,]\d{2})?\s*(?:€|EUR)\b", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bKM\s*0*\d+\b", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\b\d+\s*kg\b", "", s, flags=re.IGNORECASE)
+
+    s = re.sub(r"\bN[°o]\s*[A-Z]+\s*:.*$", "", s, flags=re.IGNORECASE)
+
+    s = re.sub(r"[\:\,\(\)\.\!\?]+$", "", s).strip()
+    s = re.sub(r"\s+", " ", s).strip()
+
+    return s
+
+
 def _pdf_to_pages_text(pdf_bytes: bytes, max_pages: int = 10) -> List[str]:
-    """Retourne la liste des textes par page avec pdfplumber."""
     pages: List[str] = []
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         for p in pdf.pages[:max_pages]:
@@ -40,38 +250,93 @@ def _pdf_to_pages_text(pdf_bytes: bytes, max_pages: int = 10) -> List[str]:
 
 
 def _clean_station(s: str) -> str:
-    s = s.strip()
-    s = re.sub(r"\s+", " ", s)
-    s = s.replace(" ST ", " SAINT ")
-    s = s.replace(" STE ", " SAINTE ")
+    s = _normalize_text(s)
+    s = re.sub(r"\bST\b", "SAINT", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bSTE\b", "SAINTE", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s+", " ", s).strip()
     return s
 
 
-def _looks_like_station(s: str) -> bool:
-    """Heuristique : est-ce que cette chaîne ressemble à un nom de gare ?"""
-    if not s or len(s) < 4:
+def _is_noise_line(s: str) -> bool:
+    if not s:
+        return True
+
+    up = s.upper().strip()
+
+    if any(p.upper() in up for p in NOISE_PATTERNS):
+        return True
+
+    if len(s) > 100:
+        return True
+
+    return False
+
+
+def _is_title_case_like_station(s: str) -> bool:
+    words = [w for w in re.split(r"[\s\-]+", s.strip()) if w]
+    if not words:
         return False
 
-    up = s.upper()
+    good = 0
+    alpha = 0
+    for w in words:
+        if re.search(r"[A-Za-zÀ-ÿ]", w):
+            alpha += 1
+            if w[:1].isupper():
+                good += 1
 
-    # majoritairement en majuscules
-    letters = [c for c in s if c.isalpha()]
-    if letters:
-        upper_letters = sum(
-            1 for c in letters if c.isupper() or c in "ÀÂÄÇÉÈÊËÎÏÔÖÙÛÜŸ"
+    return alpha > 0 and good / alpha >= 0.7
+
+
+def _looks_like_station(s: str) -> bool:
+    if not s:
+        return False
+
+    s = s.strip()
+    if len(s) < 3 or len(s) > 80:
+        return False
+
+    if PATTERN_TIME.search(s):
+        return False
+
+    if re.search(r"\d", s):
+        return False
+
+    tokens = _tokenize_upper(s)
+    if not (1 <= len(tokens) <= 8):
+        return False
+
+    token_set = set(tokens)
+
+    has_stop_token = _contains_stop_token(s)
+    has_station_hint = bool(token_set & STATION_HINTS)
+
+    if has_stop_token:
+        allowed_station_tokens = {"GARE", "TGV", "VILLE", "SAINT", "SAINTE"}
+        only_allowed_stop_tokens = all(
+            tok not in STOP_TOKENS or tok in allowed_station_tokens
+            for tok in token_set
         )
-        if upper_letters / max(1, len(letters)) < 0.85:
+
+        if not (has_station_hint and only_allowed_stop_tokens):
             return False
 
-    # pas de mots "parasites"
-    for bad in STOP_CONTAINS:
-        if bad in up:
-            return False
+    letters = [c for c in s if c.isalpha()]
+    uppercase_ratio = 0.0
+    if letters:
+        uppercase_ratio = sum(1 for c in letters if c.isupper()) / max(1, len(letters))
 
-    # au moins 1 token de 3+ lettres en majuscules
-    tokens = [t for t in re.split(r"[\s\-]+", up) if t]
-    big_tokens = [t for t in tokens if len(t) >= 3 and t.isupper()]
-    return len(big_tokens) >= 1
+    is_upperish = uppercase_ratio >= 0.65
+    is_titleish = _is_title_case_like_station(s)
+
+    if not (is_upperish or is_titleish):
+        return False
+
+    if has_station_hint:
+        return True
+
+    long_tokens = [t for t in tokens if len(t) >= 3]
+    return len(long_tokens) >= 1 and len(tokens) <= 6
 
 
 def _find_date(text: str) -> Optional[str]:
@@ -79,37 +344,156 @@ def _find_date(text: str) -> Optional[str]:
     return m.group(0).strip() if m else None
 
 
-def _stations_from_page(page_text: str, debug: bool = False) -> List[str]:
-    """
-    Sur UNE page : on cherche les 2 lignes de type:
-      '15h00 PARIS GARE DE LYON'
-      '16h56 LYON PART DIEU'
-    et on renvoie [origin, destination].
-    """
-    if not page_text:
-        return []
+def _find_reported_km(text: str) -> Optional[float]:
+    m = re.search(r"Distance\s*:\s*KM\s*0*(\d+)", text, flags=re.IGNORECASE)
+    if not m:
+        return None
 
-    lines = [l.strip() for l in page_text.splitlines() if l.strip()]
-    stations: List[str] = []
+    try:
+        value = int(m.group(1))
+        if value <= 0:
+            return None
+        return float(value)
+    except Exception:
+        return None
 
-    def _clean_after_text(txt: str) -> str:
-        t = txt.strip()
-        # retirer une heure éventuelle au début
-        t = PATTERN_TIME.sub("", t).strip()
-        # enlever 'Prix : ...', montants, etc.
-        t = re.sub(r"\bPrix\b.*$", "", t, flags=re.IGNORECASE)
-        t = re.sub(r"\d{1,3}(?:[.,]\d{2})?\s*(?:€|EUR)\b", "", t, flags=re.IGNORECASE)
-        t = re.sub(r"(€|EUR)\b", "", t, flags=re.IGNORECASE)
-        t = re.sub(r"[\:\,\(\)\.\-\/]+$", "", t).strip()
-        return _clean_station(t)
 
-    for i, line in enumerate(lines):
-        m = PATTERN_TIME.search(line)
+def _extract_stations_from_labels(page_text: str, debug: bool = False) -> List[str]:
+    origin = None
+    dest = None
+
+    for raw_line in page_text.splitlines():
+        line = raw_line.strip()
+
+        m_de = re.match(r"^DE\s*:\s*(.+)$", line, flags=re.IGNORECASE)
+        if m_de:
+            candidate = _clean_station(_clean_station_candidate(m_de.group(1)))
+            if _looks_like_station(candidate):
+                origin = candidate
+
+        m_a = re.match(r"^[ÀA]\s*:\s*(.+)$", line, flags=re.IGNORECASE)
+        if m_a:
+            candidate = _clean_station(_clean_station_candidate(m_a.group(1)))
+            if _looks_like_station(candidate):
+                dest = candidate
+
+    if debug:
+        print(f"[TGV][DEBUG] label stations origin={origin} dest={dest}")
+
+    return [s for s in [origin, dest] if s]
+
+
+def _extract_stations_from_arrow_header(page_text: str, debug: bool = False) -> List[str]:
+    for raw_line in page_text.splitlines():
+        line = raw_line.strip()
+        if ">" not in line:
+            continue
+
+        m = PATTERN_LABEL_ROUTE.match(line)
         if not m:
             continue
 
-        raw_after = PATTERN_TIME.sub("", line).strip(" -–—:|•\t")
-        after = _clean_after_text(raw_after)
+        origin = _clean_station(_clean_station_candidate(m.group(1)))
+        dest = _clean_station(_clean_station_candidate(m.group(2)))
+
+        if _looks_like_station(origin) and _looks_like_station(dest):
+            if debug:
+                print(f"[TGV][DEBUG] arrow header origin={origin} dest={dest}")
+            return [origin, dest]
+
+    return []
+
+
+def _extract_stations_from_table_rows(page_text: str, debug: bool = False) -> List[str]:
+    found: List[str] = []
+
+    for raw_line in page_text.splitlines():
+        line = raw_line.strip()
+        m = PATTERN_STATION_DATETIME.match(line)
+        if not m:
+            continue
+
+        candidate = _clean_station(_clean_station_candidate(m.group(1)))
+        if _looks_like_station(candidate):
+            found.append(candidate)
+
+    out: List[str] = []
+    for s in found:
+        if not out or s != out[-1]:
+            out.append(s)
+        if len(out) == 2:
+            break
+
+    if debug and out:
+        print(f"[TGV][DEBUG] table stations={out}")
+
+    return out
+
+
+def _extract_station_sequence_from_itinerary(lines: List[str], debug: bool = False) -> List[str]:
+    """
+    Ex :
+      14h06
+      MONTLUCON VILLE
+      ...
+      15h32
+      BOURGES
+      15h55
+      BOURGES
+      ...
+      17h53
+      PARIS AUSTERLITZ
+    """
+    seq: List[str] = []
+
+    for i, line in enumerate(lines):
+        if not PATTERN_LINE_TIME.match(line):
+            continue
+
+        raw_after = PATTERN_LINE_TIME.sub("", line).strip(" -–—:|•\t")
+        inline_candidate = _clean_station(_clean_station_candidate(raw_after))
+
+        if _looks_like_station(inline_candidate):
+            if not seq or seq[-1] != inline_candidate:
+                seq.append(inline_candidate)
+                if debug:
+                    print(f"[TGV][DEBUG] seq inline station='{inline_candidate}'")
+            continue
+
+        for j in range(1, 4):
+            if i + j >= len(lines):
+                break
+
+            nxt = lines[i + j].strip()
+            candidate = _clean_station(_clean_station_candidate(nxt))
+
+            if _is_noise_line(candidate):
+                continue
+
+            candidate = _clean_station(
+                _clean_station_candidate(PATTERN_LINE_TIME.sub("", candidate).strip())
+            )
+
+            if _looks_like_station(candidate):
+                if not seq or seq[-1] != candidate:
+                    seq.append(candidate)
+                    if debug:
+                        print(f"[TGV][DEBUG] seq next+{j} station='{candidate}'")
+                break
+
+    return seq
+
+
+def _extract_stations_from_inline_lines(lines: List[str], debug: bool = False) -> List[str]:
+    stations: List[str] = []
+
+    for i, line in enumerate(lines):
+        m = PATTERN_LINE_TIME.search(line)
+        if not m:
+            continue
+
+        raw_after = PATTERN_LINE_TIME.sub("", line).strip(" -–—:|•\t")
+        after = _clean_station(_clean_station_candidate(raw_after))
 
         if debug:
             print(
@@ -117,40 +501,50 @@ def _stations_from_page(page_text: str, debug: bool = False) -> List[str]:
                 f"-> raw_after='{raw_after}' -> after_clean='{after}'"
             )
 
-        # si vide ou trop court, on cherche dans les lignes suivantes
-        if not after or len(after) < 4:
-            found = False
-            for j in range(1, 4):  # jusqu'à 3 lignes suivantes
-                if i + j >= len(lines):
-                    break
-                nxt_raw = lines[i + j]
-                candidate = PATTERN_TIME.sub("", nxt_raw).strip()
-                nxt = _clean_after_text(candidate)
-                if debug:
-                    print(
-                        f"[TGV][DEBUG]   fallback next+{j}='{nxt_raw}' "
-                        f"-> candidate='{candidate}' -> '{nxt}'"
-                    )
-                if _looks_like_station(nxt):
-                    after = nxt
-                    found = True
-                    if debug:
-                        print(f"[TGV][DEBUG]   chosen from next+{j}: '{after}'")
-                    break
-            if not found and debug:
-                print(f"[TGV][DEBUG]   ❌ no station found near line {i}")
-
         if _looks_like_station(after):
             stations.append(after)
             if debug:
                 print(f"[TGV][DEBUG]   ✅ station kept: '{after}'")
-            if len(stations) == 2:
-                break
-        else:
-            if debug:
-                print(f"[TGV][DEBUG]   ❌ rejected as station: '{after}'")
+            continue
 
-    # dédoublonnage (⚠️ ici tu avais tapé outappend au lieu de out.append)
+        if after:
+            if debug:
+                print(f"[TGV][DEBUG]   ❌ inline candidate rejected: '{after}'")
+            continue
+
+        found = False
+        for j in range(1, 7):
+            if i + j >= len(lines):
+                break
+
+            nxt_raw = lines[i + j].strip()
+            candidate = _clean_station(_clean_station_candidate(nxt_raw))
+
+            if debug:
+                print(
+                    f"[TGV][DEBUG]   fallback next+{j}='{nxt_raw}' "
+                    f"-> candidate='{candidate}'"
+                )
+
+            if _is_noise_line(candidate):
+                if debug:
+                    print(f"[TGV][DEBUG]   skipped noise next+{j}: '{candidate}'")
+                continue
+
+            candidate = _clean_station(
+                _clean_station_candidate(PATTERN_LINE_TIME.sub("", candidate).strip())
+            )
+
+            if _looks_like_station(candidate):
+                stations.append(candidate)
+                found = True
+                if debug:
+                    print(f"[TGV][DEBUG]   chosen from next+{j}: '{candidate}'")
+                break
+
+        if not found and debug:
+            print(f"[TGV][DEBUG]   ❌ no station found near line {i}")
+
     out: List[str] = []
     for s in stations:
         if not out or s != out[-1]:
@@ -159,8 +553,57 @@ def _stations_from_page(page_text: str, debug: bool = False) -> List[str]:
     return out
 
 
+def _stations_from_page(page_text: str, debug: bool = False) -> List[str]:
+    if not page_text:
+        return []
+
+    labeled = _extract_stations_from_labels(page_text, debug=debug)
+    if len(labeled) >= 2:
+        return labeled[:2]
+
+    arrow = _extract_stations_from_arrow_header(page_text, debug=debug)
+    if len(arrow) >= 2:
+        return arrow[:2]
+
+    table_rows = _extract_stations_from_table_rows(page_text, debug=debug)
+    if len(table_rows) >= 2:
+        return table_rows[:2]
+
+    lines = [l.strip() for l in page_text.splitlines() if l.strip()]
+    stations = _extract_stations_from_inline_lines(lines, debug=debug)
+
+    out: List[str] = []
+    for s in stations:
+        if not out or s != out[-1]:
+            out.append(s)
+        if len(out) == 2:
+            break
+
+    return out
+
+
+def _segments_from_page(page_text: str, debug: bool = False) -> List[Tuple[str, str]]:
+    """
+    Retourne les segments de trajet d'une page.
+    """
+    lines = [l.strip() for l in page_text.splitlines() if l.strip()]
+    seq = _extract_station_sequence_from_itinerary(lines, debug=debug)
+
+    if len(seq) >= 2:
+        segments = [(seq[i], seq[i + 1]) for i in range(len(seq) - 1)]
+        if debug:
+            print(f"[TGV][DEBUG] station sequence={seq}")
+            print(f"[TGV][DEBUG] segments={segments}")
+        return segments
+
+    stations = _stations_from_page(page_text, debug=debug)
+    if len(stations) >= 2:
+        return [(stations[0], stations[1])]
+
+    return []
+
+
 def _compute_km_haversine(origin: str, dest: str) -> Optional[float]:
-    """Geocode + distance haversine, avec log en cas d'erreur."""
     try:
         o = geocode_place(origin)
         d = geocode_place(dest)
@@ -171,7 +614,7 @@ def _compute_km_haversine(origin: str, dest: str) -> Optional[float]:
     return None
 
 
-# ---- Fonction principale appelée par extract_router ------------------------
+# ---- Fonction principale ---------------------------------------------------
 
 def extract_tgv_from_pdf_bytes_local(
     pdf_bytes: bytes,
@@ -179,7 +622,7 @@ def extract_tgv_from_pdf_bytes_local(
     debug: bool = False,
 ) -> RidesExtraction:
     """
-    Retourne 1 RideRow par page TGV trouvée (souvent aller + retour).
+    Retourne 1 RideRow par segment trouvé sur chaque page train.
     """
     pages = _pdf_to_pages_text(pdf_bytes, max_pages=10)
 
@@ -194,35 +637,39 @@ def extract_tgv_from_pdf_bytes_local(
             print(f"\n[TGV][DEBUG] --- PAGE {page_idx + 1} ---")
             print(page_text)
 
-        stations = _stations_from_page(page_text, debug=debug)
+        segments = _segments_from_page(page_text, debug=debug)
 
         if debug:
-            print(f"[TGV][DEBUG] page {page_idx + 1} stations={stations}")
+            print(f"[TGV][DEBUG] page {page_idx + 1} segments={segments}")
 
-        if len(stations) < 2:
+        if not segments:
             continue
 
-        origin_name, dest_name = stations[0], stations[1]
         date = _find_date(page_text)
+        reported_km = _find_reported_km(page_text)
 
-        km_computed = _compute_km_haversine(origin_name, dest_name)
+        for seg_idx, (origin_name, dest_name) in enumerate(segments):
+            km_computed = _compute_km_haversine(origin_name, dest_name)
 
-        if debug:
-            print(
-                f"[TGV][DEBUG] geocode origin='{origin_name}' -> km={km_computed}"
+            if debug:
+                print(
+                    f"[TGV][DEBUG] segment {seg_idx + 1} origin='{origin_name}' dest='{dest_name}' -> km={km_computed}"
+                )
+
+            # On n'utilise le reported_km que s'il n'y a qu'un seul segment
+            seg_reported_km = reported_km if len(segments) == 1 else None
+
+            row = RideRow(
+                cheque_or_course=filename,
+                date_time_start=date,
+                date_time_end=None,
+                pickup_address=origin_name,
+                destination_address=dest_name,
+                passenger=None,
+                reported_km=seg_reported_km,
             )
+            setattr(row, "km_computed", km_computed)
 
-        row = RideRow(
-            cheque_or_course=filename,
-            date_time_start=date,
-            date_time_end=None,
-            pickup_address=origin_name,
-            destination_address=dest_name,
-            passenger=None,
-            reported_km=None,
-        )
-        setattr(row, "km_computed", km_computed)
-
-        rows.append(row)
+            rows.append(row)
 
     return RidesExtraction(rows=rows)

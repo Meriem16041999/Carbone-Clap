@@ -125,7 +125,7 @@ with st.sidebar:
     debug_tgv = st.toggle("TGV", value=False)
     debug_rental = st.toggle("Rental", value=False)
     debug_g7 = st.toggle("G7", value=False)
-
+    debug_air = st.toggle("Air", value=False)
     st.divider()
     show_all_cols = st.toggle("Afficher toutes les colonnes", value=False)
 
@@ -173,6 +173,7 @@ with st.status("Extraction en cours...", expanded=False) as status:
                 debug_tgv=debug_tgv,
                 debug_rental=debug_rental,
                 debug_g7=debug_g7,
+                debug_air=debug_air,
             )
 
             for row in extraction.rows:
@@ -187,6 +188,7 @@ with st.status("Extraction en cours...", expanded=False) as status:
                         "Destination": row.destination_address,
                         "Personne transportée": row.passenger,
                         "reported_km": row.reported_km,
+                        "km_computed": getattr(row, "km_computed", None),
                     }
                 )
 
@@ -212,6 +214,13 @@ df["Destination"] = df["Destination"].fillna("").astype(str).str.strip()
 # -------------------------
 # CALCUL KM
 # -------------------------
+# -------------------------
+# CALCUL KM
+# -------------------------
+# -------------------------
+# -------------------------
+# CALCUL KM
+# -------------------------
 km_used = []
 km_source = []
 
@@ -219,33 +228,41 @@ for _, r in df.iterrows():
     origin = r["Adresse prise en charge"]
     dest = r["Destination"]
     reported = r.get("reported_km")
+    precomputed = r.get("km_computed")
 
-    # 1) Priorité au km déclaré (rental, etc.)
+    # 1) Priorité au km déclaré
     if use_reported_default and reported not in (None, "", 0):
         km_used.append(float(reported))
         km_source.append("reported")
         continue
 
-    # 2) Train → Haversine
-    if r["doc_type"] == "tgv" and origin and dest:
+    # 2) Reprendre le km déjà calculé par l'extracteur
+    if precomputed not in (None, "", 0):
+        km_used.append(float(precomputed))
+        km_source.append("precomputed")
+        continue
+
+    # 3) TGV / AIR -> Haversine
+    if r["doc_type"] in ("tgv", "air") and origin and dest:
         origin_coords = geocode_place(origin)
         dest_coords = geocode_place(dest)
+
         if origin_coords and dest_coords:
             km = haversine_km(origin_coords, dest_coords)
-            km_used.append(km)
-            km_source.append("computed_train_haversine")
+            km_used.append(float(km))
+            km_source.append(f"computed_{r['doc_type']}_haversine")
         else:
             km_used.append(None)
             km_source.append("geocode_failed")
         continue
 
-    # 3) Routier → Google routes (cache)
+    # 4) Routier -> Google routes
     if origin and dest:
         key = f"{origin}__{dest}"
         cached = cache.get(key)
 
         if cached is not None:
-            km_used.append(cached)
+            km_used.append(float(cached))
             km_source.append("computed_cached")
             continue
 
@@ -253,7 +270,7 @@ for _, r in df.iterrows():
             try:
                 km = driving_km(origin, dest)
                 cache.set(key, km)
-                km_used.append(km)
+                km_used.append(float(km))
                 km_source.append("computed_google")
             except Exception:
                 km_used.append(None)
@@ -269,7 +286,7 @@ df["km_used"] = km_used
 df["km_source"] = km_source
 
 total_km = pd.to_numeric(df["km_used"], errors="coerce").dropna().sum()
-
+ 
 # -------------------------
 # KPIs
 # -------------------------

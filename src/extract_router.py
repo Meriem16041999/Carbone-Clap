@@ -5,6 +5,8 @@ from extract_g7 import extract_g7_rides_from_pdf_bytes
 from extract_avis_local import extract_avis_from_pdf_text
 from extract_tgv_local import extract_tgv_from_pdf_bytes_local
 from extract_rental_local import extract_rental_from_pdf_bytes
+from extract_air_local import extract_air_from_pdf_bytes_local
+
 
 def detect_type_from_text(text: str, filename: str) -> str:
     t = (text or "").lower()
@@ -53,7 +55,44 @@ def detect_type_from_text(text: str, filename: str) -> str:
     if any(h in t for h in rental_hints) or "rent" in fn or "enterprise" in fn or "avis" in fn:
         return "rental"
 
-    # ---------- 3) TGV / SNCF ----------
+    # ---------- 3) Avion / Amadeus / CheckMyTrip ----------
+    air_hints = [
+        "checkmytrip",
+        "votre voyage",
+        "discover amadeus media solutions",
+        "statut de la réservation",
+        "statut de la reservation",
+        "heure limite d'enregistrement",
+        "heure limite denregistrement",
+        "bagages autorisés",
+        "bagages autorises",
+        "numéro de billet",
+        "numero de billet",
+        "terminal:",
+        "air france",
+        "volotea",
+        "ryanair",
+        "easyjet",
+        "transavia",
+        "vueling",
+        "klm",
+        "lufthansa",
+        "british airways",
+        "ita airways",
+        "swiss",
+        "brussels airlines",
+        "air europa",
+    ]
+    if (
+        any(h in t for h in air_hints)
+        or "itinerary" in fn
+        or "billets avion" in fn
+        or "boarding pass" in fn
+        or "checkmytrip" in fn
+    ):
+        return "air"
+
+    # ---------- 4) TGV / SNCF ----------
     tgv_strong_hints = [
         "tgv",
         "inoui",
@@ -67,14 +106,13 @@ def detect_type_from_text(text: str, filename: str) -> str:
         "e billet",
         "prêts ? embarquez",
         "prets ? embarquez",
+        "justificatif de voyage",
     ]
     if any(h in t for h in tgv_strong_hints) or "tgv" in fn or ("sncf" in fn and "taxi" not in fn):
         return "tgv"
 
-    # ---------- 4) AVIS (si tu veux garder un type distinct) ----------
-    # Perso je te conseille de tout mettre dans "rental" pour AVIS.
+    # ---------- 5) AVIS (si tu veux garder un type distinct) ----------
     return "unknown"
- 
 
 
 def extract_any(
@@ -83,10 +121,11 @@ def extract_any(
     debug_tgv: bool = False,
     debug_rental: bool = False,
     debug_g7: bool = False,
+    debug_air: bool = False,
 ):
     """
     Retourne: (doc_type, extraction)
-    doc_type in {"g7", "tgv", "rental", "avis", "unknown"}
+    doc_type in {"g7", "tgv", "rental", "avis", "air", "unknown"}
     """
     text = pdf_to_text(pdf_bytes, max_pages=5)
     doc_type = detect_type_from_text(text, filename)
@@ -102,6 +141,9 @@ def extract_any(
 
     if doc_type == "rental":
         return "rental", extract_rental_from_pdf_bytes(pdf_bytes, filename, debug=debug_rental)
+
+    if doc_type == "air":
+        return "air", extract_air_from_pdf_bytes_local(pdf_bytes, filename, debug=debug_air)
 
     if doc_type == "avis":
         return "avis", extract_avis_from_pdf_text(text, filename)
