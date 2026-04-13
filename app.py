@@ -140,7 +140,7 @@ st.caption("Analyse automatisée des déplacements – Fremantle France")
 # -------------------------
 uploaded_files = st.file_uploader(
     "Upload tes PDFs",
-    type=["pdf"],
+    type=["pdf","csv"],
     accept_multiple_files=True,
 )
 
@@ -164,16 +164,15 @@ with st.status("Extraction en cours...", expanded=False) as status:
         progress_bar.progress(int(i / n * 100))
 
         try:
-            pdf_bytes = uf.getvalue()
+            file_bytes = uf.getvalue()
             filename = uf.name
 
             doc_type, extraction = extract_any(
-                pdf_bytes,
+                file_bytes,
                 filename,
                 debug_tgv=debug_tgv,
                 debug_rental=debug_rental,
                 debug_g7=debug_g7,
-                debug_air=debug_air,
             )
 
             for row in extraction.rows:
