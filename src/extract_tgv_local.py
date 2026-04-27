@@ -212,30 +212,54 @@ def _contains_stop_token(s: str) -> bool:
 
 
 def _clean_station_candidate(s: str) -> str:
-    s = _normalize_text(s)
+    s = (s or "").strip()
 
+    # enlever heure au début
+    s = re.sub(r"^\d{1,2}[hH:]\d{2}\s+", "", s, flags=re.IGNORECASE)
+
+    # couper les textes parasites fréquents
+    s = re.sub(r"Prix du billet.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bPrix\s*:\s*.*$", "", s, flags=re.IGNORECASE)
     s = re.sub(r"PR[ÊE]TS\s*\?\s*EMBARQUEZ\s*!.*$", "", s, flags=re.IGNORECASE)
     s = re.sub(r"PR[ÊE]TS.*$", "", s, flags=re.IGNORECASE)
 
-    s = re.sub(r"\bPrix\b.*$", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"\bDistance\b.*$", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"\bAchet[ée]\b.*$", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"\bVoyageur\b.*$", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"\bDossier\b.*$", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"\bNom\b.*$", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"\bPr[ée]nom\b.*$", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"\bGrande Vitesse train\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bTARIF NORMAL\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bBILLET STRAPONTIN\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bALLER SIMPLE\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bITINÉRAIRE\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bITINERAIRE\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bNON ÉCHANGEABLE\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bNON ECHANGEABLE\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bsans frais.*$", "", s, flags=re.IGNORECASE)
 
+    s = re.sub(r"\bCAR TER\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bTRAIN TER\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bNOMAD\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bOpéré par\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bOpere par\b.*$", "", s, flags=re.IGNORECASE)
+
+    s = re.sub(r"\bVoiture.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bSalle.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bPlace.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bDuo.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bSolo.*$", "", s, flags=re.IGNORECASE)
+
+    # normalisations utiles
+    s = re.sub(r"\bPARIS ST LAZARE\b", "PARIS SAINT LAZARE", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bPARIS MONTPARNASSE\s+1\s*ET\s*2\b", "PARIS MONTPARNASSE", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bAVANTAGIO[' ]?FUT[ÉE]\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bSEMI FLEX\b.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bsur le site SNCF.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bUn titre de transport.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bValable uniquement.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bEchange et remboursement.*$", "", s, flags=re.IGNORECASE)
+    # enlever euros / montants
     s = re.sub(r"\d{1,3}(?:[.,]\d{2})?\s*(?:€|EUR)\b", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"\bKM\s*0*\d+\b", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"\b\d+\s*kg\b", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"(€|EUR)\b", "", s, flags=re.IGNORECASE)
 
-    s = re.sub(r"\bN[°o]\s*[A-Z]+\s*:.*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s+", " ", s).strip(" -.:;,")
 
-    s = re.sub(r"[\:\,\(\)\.\!\?]+$", "", s).strip()
-    s = re.sub(r"\s+", " ", s).strip()
-
-    return s
+    return _clean_station(s)
 
 
 def _pdf_to_pages_text(pdf_bytes: bytes, max_pages: int = 10) -> List[str]:
@@ -287,57 +311,63 @@ def _is_title_case_like_station(s: str) -> bool:
 
     return alpha > 0 and good / alpha >= 0.7
 
+def _normalize_station_text(s: str) -> str:
+    s = (s or "").strip().upper()
+    s = s.replace("\u00A0", " ").replace("\u202F", " ")
+    s = re.sub(r"\s+", " ", s)
+    return s
 
 def _looks_like_station(s: str) -> bool:
+    s = _normalize_station_text(s)
+
     if not s:
         return False
 
-    s = s.strip()
-    if len(s) < 3 or len(s) > 80:
+    if len(s) < 2 or len(s) > 80:
         return False
 
-    if PATTERN_TIME.search(s):
+    bad_tokens = [
+        "PRÊTS", "EMBARQUEZ",
+        "VOITURE", "PLACE",
+        "DUO", "SOLO",
+        "CÔTÉ", "COTE",
+        "PRIX", "EUR",
+        "BILLET", "STRAPONTIN",
+        "DOSSIER", "VOYAGEUR", "ADULTE",
+        "CLASSE",
+        "TARIF NORMAL",
+        "ALLER SIMPLE",
+        "ITINÉRAIRE", "ITINERAIRE",
+        "NON ÉCHANGEABLE", "NON ECHANGEABLE",
+        "SANS FRAIS",
+        "JUSQU", "REMBOURSABLE",
+        "CAR TER", "TRAIN TER",
+        "OPÉRÉ PAR", "OPERE PAR",
+        "SNCF VOYAGEURS",
+        "ACHETÉ", "ACHETE",
+        "PAIEMENT",
+        "INTERNET CONNEXION",
+        "DISTANCE",
+        "KM0",
+        "RÉF", "REF",
+    ]
+    if any(tok in s for tok in bad_tokens):
         return False
 
-    if re.search(r"\d", s):
+    # lignes manifestement non gare
+    if s.startswith(("DE :", "À :", "A :")):
         return False
 
-    tokens = _tokenize_upper(s)
-    if not (1 <= len(tokens) <= 8):
+    # autoriser gares 1 mot ou plus
+    words = re.findall(r"[A-ZÀ-ÖØ-Ý0-9\-']{2,}", s)
+    if len(words) < 1:
         return False
 
-    token_set = set(tokens)
-
-    has_stop_token = _contains_stop_token(s)
-    has_station_hint = bool(token_set & STATION_HINTS)
-
-    if has_stop_token:
-        allowed_station_tokens = {"GARE", "TGV", "VILLE", "SAINT", "SAINTE"}
-        only_allowed_stop_tokens = all(
-            tok not in STOP_TOKENS or tok in allowed_station_tokens
-            for tok in token_set
-        )
-
-        if not (has_station_hint and only_allowed_stop_tokens):
-            return False
-
-    letters = [c for c in s if c.isalpha()]
-    uppercase_ratio = 0.0
-    if letters:
-        uppercase_ratio = sum(1 for c in letters if c.isupper()) / max(1, len(letters))
-
-    is_upperish = uppercase_ratio >= 0.65
-    is_titleish = _is_title_case_like_station(s)
-
-    if not (is_upperish or is_titleish):
+    # au moins une vraie lettre
+    if not re.search(r"[A-ZÀ-ÖØ-Ý]", s):
         return False
 
-    if has_station_hint:
-        return True
-
-    long_tokens = [t for t in tokens if len(t) >= 3]
-    return len(long_tokens) >= 1 and len(tokens) <= 6
-
+    return True
 
 def _find_date(text: str) -> Optional[str]:
     m = PATTERN_DATE.search(text)
@@ -431,19 +461,6 @@ def _extract_stations_from_table_rows(page_text: str, debug: bool = False) -> Li
 
 
 def _extract_station_sequence_from_itinerary(lines: List[str], debug: bool = False) -> List[str]:
-    """
-    Ex :
-      14h06
-      MONTLUCON VILLE
-      ...
-      15h32
-      BOURGES
-      15h55
-      BOURGES
-      ...
-      17h53
-      PARIS AUSTERLITZ
-    """
     seq: List[str] = []
 
     for i, line in enumerate(lines):
@@ -453,35 +470,49 @@ def _extract_station_sequence_from_itinerary(lines: List[str], debug: bool = Fal
         raw_after = PATTERN_LINE_TIME.sub("", line).strip(" -–—:|•\t")
         inline_candidate = _clean_station(_clean_station_candidate(raw_after))
 
-        if _looks_like_station(inline_candidate):
+        if inline_candidate and _looks_like_station(inline_candidate):
             if not seq or seq[-1] != inline_candidate:
                 seq.append(inline_candidate)
                 if debug:
                     print(f"[TGV][DEBUG] seq inline station='{inline_candidate}'")
             continue
 
-        for j in range(1, 4):
+        for j in range(1, 5):
             if i + j >= len(lines):
                 break
 
-            nxt = lines[i + j].strip()
-            candidate = _clean_station(_clean_station_candidate(nxt))
+            nxt_raw = lines[i + j].strip()
+            candidate = _clean_station(_clean_station_candidate(nxt_raw))
+
+            if debug:
+                print(f"[TGV][DEBUG] seq next+{j} raw='{nxt_raw}' -> candidate='{candidate}'")
+
+            if not candidate:
+                continue
 
             if _is_noise_line(candidate):
+                if debug:
+                    print(f"[TGV][DEBUG] seq next+{j} skipped noise='{candidate}'")
                 continue
 
             candidate = _clean_station(
                 _clean_station_candidate(PATTERN_LINE_TIME.sub("", candidate).strip())
             )
 
-            if _looks_like_station(candidate):
+            if candidate and _looks_like_station(candidate):
                 if not seq or seq[-1] != candidate:
                     seq.append(candidate)
                     if debug:
                         print(f"[TGV][DEBUG] seq next+{j} station='{candidate}'")
                 break
 
-    return seq
+    # dédoublonnage final
+    clean_seq: List[str] = []
+    for s in seq:
+        if not clean_seq or s != clean_seq[-1]:
+            clean_seq.append(s)
+
+    return clean_seq
 
 
 def _extract_stations_from_inline_lines(lines: List[str], debug: bool = False) -> List[str]:
@@ -585,7 +616,36 @@ def _stations_from_page(page_text: str, debug: bool = False) -> List[str]:
 def _segments_from_page(page_text: str, debug: bool = False) -> List[Tuple[str, str]]:
     """
     Retourne les segments de trajet d'une page.
+    Priorité :
+      1. labels DE:/À:
+      2. header avec >
+      3. table rows
+      4. séquence d'itinéraire basée sur les heures
     """
+    if not page_text:
+        return []
+
+    labeled = _extract_stations_from_labels(page_text, debug=debug)
+    if len(labeled) >= 2:
+        segments = [(labeled[0], labeled[1])]
+        if debug:
+            print(f"[TGV][DEBUG] using labeled segments={segments}")
+        return segments
+
+    arrow = _extract_stations_from_arrow_header(page_text, debug=debug)
+    if len(arrow) >= 2:
+        segments = [(arrow[0], arrow[1])]
+        if debug:
+            print(f"[TGV][DEBUG] using arrow segments={segments}")
+        return segments
+
+    table_rows = _extract_stations_from_table_rows(page_text, debug=debug)
+    if len(table_rows) >= 2:
+        segments = [(table_rows[0], table_rows[1])]
+        if debug:
+            print(f"[TGV][DEBUG] using table segments={segments}")
+        return segments
+
     lines = [l.strip() for l in page_text.splitlines() if l.strip()]
     seq = _extract_station_sequence_from_itinerary(lines, debug=debug)
 
@@ -595,10 +655,6 @@ def _segments_from_page(page_text: str, debug: bool = False) -> List[Tuple[str, 
             print(f"[TGV][DEBUG] station sequence={seq}")
             print(f"[TGV][DEBUG] segments={segments}")
         return segments
-
-    stations = _stations_from_page(page_text, debug=debug)
-    if len(stations) >= 2:
-        return [(stations[0], stations[1])]
 
     return []
 

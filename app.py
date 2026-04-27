@@ -1,6 +1,7 @@
 # app.py
 import os
 import sys
+import re
 
 # Permet d'importer les modules dans /src
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
@@ -16,12 +17,69 @@ from extract_router import extract_any
 load_dotenv()
 
 # -------------------------
+# HELPERS
+# -------------------------
+def normalize_place_basic(name: str) -> str:
+    s = (name or "").strip()
+    s = s.replace("\u00A0", " ").replace("\u202F", " ")
+    s = re.sub(r"\s+", " ", s).strip()
+
+    s = re.sub(r"\bGARE\b$", "", s, flags=re.IGNORECASE).strip()
+    s = re.sub(r"\bCEDEX\b.*$", "", s, flags=re.IGNORECASE).strip()
+
+    s = s.replace("SAINT LAZARE", "SAINT-LAZARE")
+    s = s.replace("PART DIEU", "PART-DIEU")
+    s = s.replace("SAINT JEAN", "SAINT-JEAN")
+
+    return s
+
+
+def geocode_place_smart(name: str, doc_type: str = ""):
+    base = normalize_place_basic(name)
+    if not base:
+        return None
+
+    candidates = [base]
+
+    if doc_type == "tgv":
+        candidates += [
+            f"{base}, France",
+            f"Gare de {base}, France",
+            f"{base} gare, France",
+        ]
+    elif doc_type == "air":
+        candidates += [
+            f"{base}, France",
+            f"Aéroport de {base}, France",
+        ]
+    else:
+        candidates += [
+            f"{base}, France",
+        ]
+
+    seen = set()
+    uniq_candidates = []
+    for c in candidates:
+        key = c.strip().lower()
+        if key not in seen:
+            seen.add(key)
+            uniq_candidates.append(c)
+
+    for cand in uniq_candidates:
+        coords = geocode_place(cand)
+        if coords:
+            return coords
+
+    return None
+
+
+# -------------------------
 # CONFIG PAGE
 # -------------------------
 st.set_page_config(page_title="Code Carbone – CLAAP", layout="wide")
 
 # -------------------------
-# CSS (bleu + sidebar lisible)
+# CSS
 # -------------------------
 st.markdown(
     """
@@ -101,7 +159,6 @@ div[data-testid="stMetric"]{
 # SIDEBAR
 # -------------------------
 with st.sidebar:
-    # “carte” blanche pour le logo (pour qu’il soit lisible même si logo noir)
     st.markdown(
         """
         <div style="
@@ -126,6 +183,7 @@ with st.sidebar:
     debug_rental = st.toggle("Rental", value=False)
     debug_g7 = st.toggle("G7", value=False)
     debug_air = st.toggle("Air", value=False)
+
     st.divider()
     show_all_cols = st.toggle("Afficher toutes les colonnes", value=False)
 
@@ -139,13 +197,13 @@ st.caption("Analyse automatisée des déplacements – Fremantle France")
 # UPLOAD
 # -------------------------
 uploaded_files = st.file_uploader(
-    "Upload tes PDFs",
-    type=["pdf","csv"],
+    "Upload tes fichiers",
+    type=["pdf", "csv"],
     accept_multiple_files=True,
 )
 
 if not uploaded_files:
-    st.info("Upload au moins un PDF pour commencer.")
+    st.info("Upload au moins un fichier pour commencer.")
     st.stop()
 
 cache = SQLiteCache("distance_cache.sqlite")
@@ -206,50 +264,74 @@ if df.empty:
             st.write(f"- {f}: {err}")
     st.stop()
 
-# Nettoyage
-df["Adresse prise en charge"] = df["Adresse prise en charge"].fillna("").astype(str).str.strip()
-df["Destination"] = df["Destination"].fillna("").astype(str).str.strip()
+# -------------------------
+# NETTOYAGE
+# -------------------------
+for col in [
+    "Adresse prise en charge",
+    "Destination",
+    "Début",
+    "Fin",
+    "Personne transportée",
+    "doc_type",
+    "pdf",
+]:
+    if col in df.columns:
+        df[col] = df[col].fillna("").astype(str).str.strip()
 
-# -------------------------
-# CALCUL KM
-# -------------------------
-# -------------------------
-# CALCUL KM
-# -------------------------
-# -------------------------
-# -------------------------
-# CALCUL KM
-# -------------------------
 km_used = []
 km_source = []
 
 for _, r in df.iterrows():
-    origin = r["Adresse prise en charge"]
-    dest = r["Destination"]
+    origin = r.get("Adresse prise en charge", "")
+    dest = r.get("Destination", "")
     reported = r.get("reported_km")
     precomputed = r.get("km_computed")
+    doc_type = r.get("doc_type", "")
 
     # 1) Priorité au km déclaré
-    if use_reported_default and reported not in (None, "", 0):
-        km_used.append(float(reported))
-        km_source.append("reported")
-        continue
+    if use_reported_default and pd.notna(reported) and str(reported).strip() not in ("", "0", "0.0"):
+        try:
+            val = float(reported)
+            if pd.notna(val) and val > 0:
+                km_used.append(val)
+                km_source.append("reported")
+                continue
+        except Exception:
+            pass
 
     # 2) Reprendre le km déjà calculé par l'extracteur
-    if precomputed not in (None, "", 0):
-        km_used.append(float(precomputed))
-        km_source.append("precomputed")
-        continue
+    if pd.notna(precomputed) and str(precomputed).strip() not in ("", "0", "0.0"):
+        try:
+            val = float(precomputed)
+            if pd.notna(val) and val > 0:
+                km_used.append(val)
+                km_source.append("precomputed")
+                continue
+        except Exception:
+            pass
 
     # 3) TGV / AIR -> Haversine
-    if r["doc_type"] in ("tgv", "air") and origin and dest:
-        origin_coords = geocode_place(origin)
-        dest_coords = geocode_place(dest)
+    if doc_type in ("tgv", "air") and origin and dest:
+        origin_coords = geocode_place_smart(origin, doc_type)
+        dest_coords = geocode_place_smart(dest, doc_type)
+
+        if debug_tgv and doc_type == "tgv":
+            print("[TGV][DEBUG] geocode origin raw   :", origin)
+            print("[TGV][DEBUG] geocode origin coords:", origin_coords)
+            print("[TGV][DEBUG] geocode dest raw     :", dest)
+            print("[TGV][DEBUG] geocode dest coords  :", dest_coords)
+
+        if debug_air and doc_type == "air":
+            print("[AIR][DEBUG] geocode origin raw   :", origin)
+            print("[AIR][DEBUG] geocode origin coords:", origin_coords)
+            print("[AIR][DEBUG] geocode dest raw     :", dest)
+            print("[AIR][DEBUG] geocode dest coords  :", dest_coords)
 
         if origin_coords and dest_coords:
             km = haversine_km(origin_coords, dest_coords)
             km_used.append(float(km))
-            km_source.append(f"computed_{r['doc_type']}_haversine")
+            km_source.append(f"computed_{doc_type}_haversine")
         else:
             km_used.append(None)
             km_source.append("geocode_failed")
@@ -260,7 +342,7 @@ for _, r in df.iterrows():
         key = f"{origin}__{dest}"
         cached = cache.get(key)
 
-        if cached is not None:
+        if cached is not None and pd.notna(cached):
             km_used.append(float(cached))
             km_source.append("computed_cached")
             continue
@@ -285,14 +367,14 @@ df["km_used"] = km_used
 df["km_source"] = km_source
 
 total_km = pd.to_numeric(df["km_used"], errors="coerce").dropna().sum()
- 
+
 # -------------------------
 # KPIs
 # -------------------------
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Total km", f"{total_km:.2f}")
 c2.metric("Trajets", len(df))
-c3.metric("PDFs", df["pdf"].nunique())
+c3.metric("PDFs", df["pdf"].nunique() if "pdf" in df.columns else 0)
 c4.metric("Erreurs", len(errors))
 
 # -------------------------
@@ -302,6 +384,7 @@ tab1, tab2, tab3 = st.tabs(["Trajets", "Analyse", "Erreurs"])
 
 with tab1:
     view = df.copy()
+
     if not show_all_cols:
         cols = [
             "pdf",
@@ -314,14 +397,17 @@ with tab1:
         ]
         view = view[[c for c in cols if c in view.columns]]
 
-    # ✅ remplacer use_container_width=True par width="stretch"
     st.dataframe(view, width="stretch", hide_index=True)
 
-    csv = df.to_csv(index=False).encode("utf-8")
-    st.download_button("Télécharger CSV", csv, "trajets_extraits.csv", mime="text/csv")
+    csv_export = df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Télécharger CSV",
+        csv_export,
+        "trajets_extraits.csv",
+        mime="text/csv",
+    )
 
 with tab2:
-    # petite analyse sans plotly
     agg = (
         df.assign(km_used_num=pd.to_numeric(df["km_used"], errors="coerce"))
         .groupby("doc_type", dropna=False)["km_used_num"]
