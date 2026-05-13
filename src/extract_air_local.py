@@ -7,7 +7,8 @@ import pdfplumber
 
 from schemas import RidesExtraction, RideRow
 from routes import geocode_place, haversine_km
-
+import re
+from schemas import RidesExtraction, RideRow
 
 # ---------------------------------------------------------------------
 # Patterns
@@ -45,7 +46,16 @@ PATTERN_TERMINAL = re.compile(r"\bTerminal\s*:\s*[A-Z0-9]+\b", flags=re.IGNORECA
 PATTERN_DURATION = re.compile(r"^Durée\b", flags=re.IGNORECASE)
 PATTERN_VOL = re.compile(r"^Volotea|^Air France|^Transavia|^easyJet|^Ryanair|^Vueling", flags=re.IGNORECASE)
 
-
+PAT_AIR_DISTANCE = re.compile(
+    r"Distance\s+de\s+vol\s*[\r\n\s]+([0-9]+(?:[.,][0-9]+)?)\s*km",
+    flags=re.IGNORECASE,
+)
+AIRPORT_KM = {
+    ("ORY", "TLS"): 570.0,
+    ("TLS", "ORY"): 570.0,
+    ("CDG", "TLS"): 602.0,
+    ("TLS", "CDG"): 602.0,
+}
 # ---------------------------------------------------------------------
 # Helpers PDF
 # ---------------------------------------------------------------------
@@ -396,5 +406,70 @@ def extract_air_from_pdf_bytes_local(
             setattr(row, "km_computed", km_computed)
 
             rows.append(row)
+
+    return RidesExtraction(rows=rows)
+ 
+
+ 
+
+
+def _to_float(s: str) -> float:
+    return float(s.replace(",", "."))
+
+
+def extract_air_from_pdf_text(text: str, filename: str, debug: bool = False) -> RidesExtraction:
+    matches = PAT_AIR_DISTANCE.findall(text or "")
+
+    if debug:
+        print(f"[AIR][DEBUG] distances trouvées:", matches)
+
+    rows = []
+
+    # ✅ CAS 1 : Distance de vol trouvée (cas classique)
+    if matches:
+        for km_str in matches:
+            km = float(km_str.replace(",", "."))
+            rows.append(
+                RideRow(
+                    cheque_or_course=filename,
+                    date_time_start=None,
+                    date_time_end=None,
+                    pickup_address=None,
+                    destination_address=None,
+                    passenger=None,
+                    reported_km=km,
+                )
+            )
+        return RidesExtraction(rows=rows)
+
+    # ✅ CAS 2 : Boarding pass (fallback codes aéroport)
+    AIRPORT_KM = {
+        ("ORY", "TLS"): 570.0,
+        ("TLS", "ORY"): 570.0,
+        ("CDG", "TLS"): 602.0,
+        ("TLS", "CDG"): 602.0,
+    }
+
+    code_matches = re.findall(r"\b([A-Z]{3})\b", text or "")
+    codes = [c for c in code_matches if c in {"ORY", "TLS", "CDG", "BOD", "MRS", "NCE", "LYS"}]
+
+    if debug:
+        print("[AIR][DEBUG] airport codes:", codes)
+
+    for i in range(len(codes) - 1):
+        pair = (codes[i], codes[i + 1])
+        km = AIRPORT_KM.get(pair)
+        if km:
+            rows.append(
+                RideRow(
+                    cheque_or_course=filename,
+                    date_time_start=None,
+                    date_time_end=None,
+                    pickup_address=pair[0],
+                    destination_address=pair[1],
+                    passenger=None,
+                    reported_km=km,
+                )
+            )
 
     return RidesExtraction(rows=rows)

@@ -231,6 +231,7 @@ with st.status("Extraction en cours...", expanded=False) as status:
                 debug_tgv=debug_tgv,
                 debug_rental=debug_rental,
                 debug_g7=debug_g7,
+                debug_air=debug_air,
             )
 
             for row in extraction.rows:

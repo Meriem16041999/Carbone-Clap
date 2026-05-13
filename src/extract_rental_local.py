@@ -75,7 +75,14 @@ PAT_KM_IN = re.compile(
     r"(?:in|entrant|retour)\b.*?([0-9][0-9\s\u00A0\u202F]{1,20})",
     flags=re.IGNORECASE | re.DOTALL,
 )
-
+PAT_EUROPCAR_KM_PARCOURUS = re.compile(
+    r"Kilom[\wèéêë]*\s+Parcourus\s*[:\-]?\s*([0-9]{1,6})",
+    flags=re.IGNORECASE,
+)
+PAT_LCD_KM_PARCOURUS = re.compile(
+    r"Km\s*Parcourus\s*([0-9]{1,6})",
+    flags=re.IGNORECASE,
+)
 
 # ============ LCD : TABLE extraction (le vrai fix) ============
 
@@ -272,7 +279,7 @@ def extract_rental_from_pdf_bytes(pdf_bytes: bytes, filename: str, debug: bool =
         _dbg(debug, f"nb lignes intéressantes: {len(hits)}")
         for l in hits[:120]:
             _dbg(debug, " ", l)
-
+    
     # ============================================================
     # 1) LCD TABLE MODE (PRIORITÉ ABSOLUE) => récupère 764
     # ============================================================
@@ -286,7 +293,32 @@ def extract_rental_from_pdf_bytes(pdf_bytes: bytes, filename: str, debug: bool =
     lcd_text_km = _extract_lcd_km_from_text(text, debug)
     if lcd_text_km is not None:
         return RidesExtraction(rows=[_make_row(filename, lcd_text_km)])
+        # EUROPCAR : "Kilomètres Parcourus 77"
+    m_euro = PAT_EUROPCAR_KM_PARCOURUS.search(text)
+    if m_euro:
+        km = _to_int(m_euro.group(1))
+        if km > 0:
+            _dbg(debug, "EUROPCAR km parcourus:", m_euro.group(0), "->", km)
+            return RidesExtraction(rows=[_make_row(filename, float(km))])
+    # LCD (tableau) : "Km Parcourus 439"
+    m_lcd = PAT_LCD_KM_PARCOURUS.search(text)
+    if m_lcd:
+         km = _to_int(m_lcd.group(1))
+         if km > 0:
+            _dbg(debug, "LCD km parcourus:", m_lcd.group(0), "->", km)
+            return RidesExtraction(rows=[_make_row(filename, float(km))])   
 
+    # LCD fallback multi-ligne
+    m_lcd_block = re.search(
+     r"Km\s*Parcourus\s*[\n\r\s]+([0-9]{1,6})",
+    text,
+     flags=re.IGNORECASE,
+    )
+    if m_lcd_block:
+     km = _to_int(m_lcd_block.group(1))
+    if km > 0:
+        _dbg(debug, "LCD km parcourus (block):", km)
+        return RidesExtraction(rows=[_make_row(filename, float(km))])
     # ============================================================
     # 3) Enterprise
     # ============================================================
@@ -313,7 +345,13 @@ def extract_rental_from_pdf_bytes(pdf_bytes: bytes, filename: str, debug: bool =
         diff = abs(km_retour - km_depart)
         if diff > 0:
             return RidesExtraction(rows=[_make_row(filename, float(diff))])
-
+    # EUROPCAR : "Kilomètres Parcourus 77"
+    m_euro = PAT_EUROPCAR_KM_PARCOURUS.search(text)
+    if m_euro:
+        km = _to_int(m_euro.group(1))
+        if km > 0:
+            _dbg(debug, "Europcar kilomètres parcourus:", m_euro.group(0), "->", km)
+            return RidesExtraction(rows=[_make_row(filename, float(km))])
     # ============================================================
     # 5) kms parcourus / facturés
     # ============================================================
