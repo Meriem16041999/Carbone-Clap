@@ -14,10 +14,11 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 # ----------------------------
 def driving_km(origin: str, destination: str) -> float | None:
     """
-    Distance routière via Google Routes API (computeRoutes).
-    Retourne km (float) ou None si impossible.
-    Nécessite GOOGLE_API_KEY dans .env.
+    Calcule la distance routière via Google Routes API.
+    Retourne la distance en kilomètres ou None si aucun
+    itinéraire n'est disponible.
     """
+
     if not GOOGLE_API_KEY:
         raise RuntimeError("GOOGLE_API_KEY manquante dans .env")
 
@@ -26,7 +27,6 @@ def driving_km(origin: str, destination: str) -> float | None:
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": GOOGLE_API_KEY,
-        # On ne récupère que la distance -> plus léger
         "X-Goog-FieldMask": "routes.distanceMeters",
     }
 
@@ -40,23 +40,49 @@ def driving_km(origin: str, destination: str) -> float | None:
         "units": "METRIC",
     }
 
-    r = requests.post(url, headers=headers, json=body, timeout=20)
+    print(f"[GOOGLE][DEBUG] Calcul : {origin} -> {destination}")
 
-    if r.status_code != 200:
-        # utile pour debug
-        # print("Routes API error:", r.status_code, r.text)
+    try:
+        response = requests.post(
+            url,
+            headers=headers,
+            json=body,
+            timeout=20,
+        )
+
+        print("[GOOGLE][DEBUG] HTTP status:", response.status_code)
+
+        if response.status_code != 200:
+            print("[GOOGLE][ERROR] Réponse API:", response.text[:1500])
+            return None
+
+        data = response.json()
+        routes = data.get("routes", [])
+
+        if not routes:
+            print("[GOOGLE][WARNING] Aucun itinéraire trouvé")
+            print("[GOOGLE][DEBUG] Réponse:", data)
+            return None
+
+        meters = routes[0].get("distanceMeters")
+
+        if meters is None:
+            print("[GOOGLE][WARNING] distanceMeters absent")
+            return None
+
+        km = round(float(meters) / 1000.0, 2)
+
+        print(f"[GOOGLE][SUCCESS] Distance : {km} km")
+
+        return km
+
+    except requests.exceptions.RequestException as e:
+        print("[GOOGLE][ERROR] Problème réseau :", repr(e))
         return None
 
-    data = r.json()
-    routes = data.get("routes") or []
-    if not routes:
+    except (ValueError, TypeError, KeyError) as e:
+        print("[GOOGLE][ERROR] Réponse invalide :", repr(e))
         return None
-
-    meters = routes[0].get("distanceMeters")
-    if meters is None:
-        return None
-
-    return round(meters / 1000.0, 2)
 
 
 # ----------------------------

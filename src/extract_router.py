@@ -79,7 +79,6 @@ def extract_any(
         extraction = extract_g7_rides_from_pdf_bytes(
             file_bytes,
             filename,
-            debug=debug_g7,
         )
         return "g7", extraction
 

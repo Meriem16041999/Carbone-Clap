@@ -33,6 +33,40 @@ def normalize_place_basic(name: str) -> str:
 
     return s
 
+import re
+import unicodedata
+
+def normalize_address(address):
+    if not address:
+        return ""
+
+    address = str(address).strip()
+
+    # Supprimer les accents pour faciliter la comparaison
+    normalized = "".join(
+        c for c in unicodedata.normalize("NFD", address.upper())
+        if unicodedata.category(c) != "Mn"
+    )
+
+    normalized = re.sub(r"\s+", " ", normalized)
+
+    # Gare de l'Est
+    if "GARE DE L EST" in normalized or "GARE DE L'EST" in normalized:
+        return "Gare de l'Est, 75010 Paris, France"
+
+    # Gare du Nord
+    if "GARE DU NORD" in normalized:
+        return "Gare du Nord, 75010 Paris, France"
+
+    # Puteaux
+    if normalized == "PUTEAUX":
+        return "Puteaux, 92800, France"
+
+    # Bourse
+    if normalized == "BOURSE":
+        return "Place de la Bourse, 75002 Paris, France"
+
+    return address
 
 def geocode_place_smart(name: str, doc_type: str = ""):
     base = normalize_place_basic(name)
@@ -284,8 +318,11 @@ km_used = []
 km_source = []
 
 for _, r in df.iterrows():
-    origin = r.get("Adresse prise en charge", "")
-    dest = r.get("Destination", "")
+    origin = normalize_address(r["Adresse prise en charge"])
+    dest = normalize_address(r["Destination"])
+
+    print(f"[ROUTE][DEBUG] Origine : {origin}")
+    print(f"[ROUTE][DEBUG] Destination : {dest}")
     reported = r.get("reported_km")
     precomputed = r.get("km_computed")
     doc_type = r.get("doc_type", "")
@@ -351,10 +388,26 @@ for _, r in df.iterrows():
         if do_distance:
             try:
                 km = driving_km(origin, dest)
-                cache.set(key, km)
-                km_used.append(float(km))
-                km_source.append("computed_google")
-            except Exception:
+
+                print(f"[GOOGLE][DEBUG] {origin} -> {dest} = {km}")
+
+                if km is not None and float(km) > 0:
+                    km = float(km)
+
+                    cache.set(key, km)
+                    km_used.append(km)
+                    km_source.append("computed_google")
+
+                else:
+                    print(
+                        f"[GOOGLE][WARNING] Aucune distance retournée : "
+                        f"{origin} -> {dest}"
+                    )
+                    km_used.append(None)
+                    km_source.append("google_no_distance")
+
+            except Exception as e:
+                print(f"[GOOGLE][ERROR] {origin} -> {dest}: {repr(e)}")
                 km_used.append(None)
                 km_source.append("error_google")
         else:
