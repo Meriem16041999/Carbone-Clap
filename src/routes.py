@@ -38,6 +38,7 @@ def driving_km(origin: str, destination: str) -> float | None:
         "computeAlternativeRoutes": False,
         "languageCode": "fr-FR",
         "units": "METRIC",
+        "regionCode": "fr",
     }
 
     print(f"[GOOGLE][DEBUG] Calcul : {origin} -> {destination}")

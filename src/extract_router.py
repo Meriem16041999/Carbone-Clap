@@ -45,17 +45,24 @@ def extract_any(
         filename,
         debug=debug_rental,
     )
+    # AIR : uniquement les vrais documents aériens
     if (
         "AIR FRANCE" in text_up
         or "CHECKMYTRIP" in text_up
         or "COMPAGNIE EMETTRICE" in text_up
-        or "DISTANCE :" in text_up
-):
-     return "air", extract_air_from_pdf_text(
-        text,
-        filename,
-        debug=debug_air,
-    )
+        or "COMPAGNIE ÉMETTRICE" in text_up
+        or "BOARDING PASS" in text_up
+        or "DISTANCE DE VOL" in text_up
+        or "TRANSAVIA" in text_up
+ 
+    ):
+        print(f"[ROUTER][DEBUG] AIR détecté : {filename}")
+
+        return "air", extract_air_from_pdf_text(
+            text,
+            filename,
+            debug=debug_air,
+        )
 
     # IMPORTANT : AVIS AVANT TGV
     if (
@@ -114,12 +121,26 @@ def extract_any(
         or "NOMAD" in text_up
         or "RÉMI" in text_up
         or "REMI" in text_up
+        or "ITINÉRAIRE ALLER" in text_up
+        or "ITINERAIRE ALLER" in text_up
+        or "TRAIN LIO" in text_up
+        or "TRAIN TER" in text_up
+        or "SNCF VOYAGEURS" in text_up
     ):
+        print(f"[ROUTER][DEBUG] TRAIN détecté : {filename}")
+
         extraction = extract_tgv_from_pdf_bytes_local(
             file_bytes,
             filename,
             debug=debug_tgv,
         )
+
+        print(
+            f"[ROUTER][DEBUG] Nombre de trajets : "
+            f"{len(extraction.rows)}"
+        )
+
+    
         return "tgv", extraction
 
     return "unknown", RidesExtraction(rows=[])

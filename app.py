@@ -19,6 +19,41 @@ load_dotenv()
 # -------------------------
 # HELPERS
 # -------------------------
+def normalize_g7_address(address):
+    address = normalize_address(address)
+
+    if not address:
+        return ""
+
+    name = address.upper().strip()
+
+    # Destinations ambiguës fréquentes
+    corrections = {
+        "BOULOGNE": "Boulogne-Billancourt, Hauts-de-Seine, France",
+        "GARIGLIANO": "Pont du Garigliano, 75015 Paris, France",
+        "OPERA": "Place de l'Opéra, 75009 Paris, France",
+        "LA MUETTE": "La Muette, 75016 Paris, France",
+        "BOURSE": "Place de la Bourse, 75002 Paris, France",
+        "MARAIS": "Le Marais, Paris, France",
+        "ABBESSES": "Place des Abbesses, 75018 Paris, France",
+        "NON CHARGE": "",
+    }
+
+    if name in corrections:
+        return corrections[name]
+
+    # Adresses G7 déjà situées à Paris
+    if "PARIS" in name:
+        return address + (
+            ", France" if "FRANCE" not in name else ""
+        )
+
+    # Autres destinations G7 :
+    # priorité à l'Île-de-France
+    if "FRANCE" not in name:
+        return f"{address}, Île-de-France, France"
+
+    return address
 def normalize_place_basic(name: str) -> str:
     s = (name or "").strip()
     s = s.replace("\u00A0", " ").replace("\u202F", " ")
@@ -318,8 +353,26 @@ km_used = []
 km_source = []
 
 for _, r in df.iterrows():
-    origin = normalize_address(r["Adresse prise en charge"])
-    dest = normalize_address(r["Destination"])
+
+    doc_type = r.get("doc_type", "")
+
+    if doc_type == "g7":
+        origin = normalize_g7_address(
+            r["Adresse prise en charge"]
+        )
+        dest = normalize_g7_address(
+            r["Destination"]
+        )
+    else:
+        origin = normalize_address(
+            r["Adresse prise en charge"]
+        )
+        dest = normalize_address(
+            r["Destination"]
+        )
+
+    print(f"[ROUTE][DEBUG] Origine : {origin}")
+    print(f"[ROUTE][DEBUG] Destination : {dest}")
 
     print(f"[ROUTE][DEBUG] Origine : {origin}")
     print(f"[ROUTE][DEBUG] Destination : {dest}")
@@ -377,7 +430,7 @@ for _, r in df.iterrows():
 
     # 4) Routier -> Google routes
     if origin and dest:
-        key = f"{origin}__{dest}"
+        key = f"v2_idf__{origin}__{dest}"
         cached = cache.get(key)
 
         if cached is not None and pd.notna(cached):

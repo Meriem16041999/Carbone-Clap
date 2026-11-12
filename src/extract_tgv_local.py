@@ -694,6 +694,18 @@ def extract_tgv_from_pdf_bytes_local(
             print(page_text)
 
         segments = _segments_from_page(page_text, debug=debug)
+        # Fallback pour les billets TER / liO
+        if not segments:
+            stations = _extract_stations_from_labels(
+                page_text,
+                debug=debug
+            )
+
+            if len(stations) == 2:
+                segments = [(stations[0], stations[1])]
+
+                if debug:
+                    print("[TGV][DEBUG] TER fallback:", segments)
 
         if debug:
             print(f"[TGV][DEBUG] page {page_idx + 1} segments={segments}")

@@ -4,6 +4,8 @@ from typing import Optional
 
 from pdf_text import pdf_to_text
 from schemas import RidesExtraction, RideRow
+import re
+from routes import geocode_place, haversine_km
 
 
 KM_PATTERNS = [
@@ -67,3 +69,71 @@ def extract_avis_from_pdf_bytes(
         return RidesExtraction(rows=[])
 
     return RidesExtraction(rows=[_make_row(filename, km)])
+
+def extract_transavia_boarding_pass(
+    text: str,
+    filename: str,
+    debug: bool = False,
+) -> RidesExtraction:
+
+    # Format :
+    # PARIS (ORLY) (ORY)  PERPIGNAN (PGF)
+
+    pattern = re.compile(
+        r"PARIS\s*\(ORLY\)\s*\(ORY\)\s+"
+        r"PERPIGNAN\s*\(PGF\)",
+        flags=re.IGNORECASE,
+    )
+
+    match = pattern.search(text or "")
+
+    if not match:
+        return RidesExtraction(rows=[])
+
+    # Date au format JJ-MM-AAAA
+    date_match = re.search(
+        r"\b\d{2}-\d{2}-\d{4}\b",
+        text,
+    )
+
+    date = date_match.group(0) if date_match else None
+
+    origin = "Aéroport de Paris-Orly, France"
+    destination = "Aéroport de Perpignan-Rivesaltes, France"
+
+    # Calcul de la distance aérienne
+    km = None
+
+    try:
+        coords_origin = geocode_place(origin)
+        coords_destination = geocode_place(destination)
+
+        if coords_origin and coords_destination:
+            km = haversine_km(
+                coords_origin,
+                coords_destination,
+            )
+
+    except Exception as e:
+        if debug:
+            print("[AIR][DEBUG] Erreur géocodage :", e)
+
+    if debug:
+        print("[AIR][DEBUG] Transavia détecté")
+        print("[AIR][DEBUG] Origine :", origin)
+        print("[AIR][DEBUG] Destination :", destination)
+        print("[AIR][DEBUG] Distance :", km)
+
+    row = RideRow(
+        cheque_or_course=filename,
+        date_time_start=date,
+        date_time_end=None,
+        pickup_address=origin,
+        destination_address=destination,
+        passenger=None,
+        reported_km=None,
+    )
+
+    setattr(row, "km_computed", km)
+
+    return RidesExtraction(rows=[row])

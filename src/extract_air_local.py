@@ -415,34 +415,155 @@ def extract_air_from_pdf_bytes_local(
 
 def _to_float(s: str) -> float:
     return float(s.replace(",", "."))
+def extract_transavia_boarding_pass(
+    text: str,
+    filename: str,
+    debug: bool = False,
+) -> RidesExtraction:
 
+    # Format :
+    # PARIS (ORLY) (ORY)  PERPIGNAN (PGF)
 
-def extract_air_from_pdf_text(text: str, filename: str, debug: bool = False) -> RidesExtraction:
-    matches = PAT_AIR_DISTANCE.findall(text or "")
+    pattern = re.compile(
+        r"PARIS\s*\(ORLY\)\s*\(ORY\)\s+"
+        r"PERPIGNAN\s*\(PGF\)",
+        flags=re.IGNORECASE,
+    )
+
+    match = pattern.search(text or "")
+
+    if not match:
+        return RidesExtraction(rows=[])
+
+    # Date au format JJ-MM-AAAA
+    date_match = re.search(
+        r"\b\d{2}-\d{2}-\d{4}\b",
+        text,
+    )
+
+    date = date_match.group(0) if date_match else None
+
+    origin = "Aéroport de Paris-Orly, France"
+    destination = "Aéroport de Perpignan-Rivesaltes, France"
+
+    # Calcul de la distance aérienne
+    km = None
+
+    try:
+        coords_origin = geocode_place(origin)
+        coords_destination = geocode_place(destination)
+
+        if coords_origin and coords_destination:
+            km = haversine_km(
+                coords_origin,
+                coords_destination,
+            )
+
+    except Exception as e:
+        if debug:
+            print("[AIR][DEBUG] Erreur géocodage :", e)
 
     if debug:
-        print(f"[AIR][DEBUG] distances trouvées:", matches)
+        print("[AIR][DEBUG] Transavia détecté")
+        print("[AIR][DEBUG] Origine :", origin)
+        print("[AIR][DEBUG] Destination :", destination)
+        print("[AIR][DEBUG] Distance :", km)
 
+    row = RideRow(
+        cheque_or_course=filename,
+        date_time_start=date,
+        date_time_end=None,
+        pickup_address=origin,
+        destination_address=destination,
+        passenger=None,
+        reported_km=None,
+    )
+
+    setattr(row, "km_computed", km)
+
+    return RidesExtraction(rows=[row])
+
+def extract_air_from_pdf_text(
+    text: str,
+    filename: str,
+    debug: bool = False
+) -> RidesExtraction:
+
+    text = text or ""
     rows = []
 
-    # ✅ CAS 1 : Distance de vol trouvée (cas classique)
-    if matches:
-        for km_str in matches:
-            km = float(km_str.replace(",", "."))
-            rows.append(
-                RideRow(
-                    cheque_or_course=filename,
-                    date_time_start=None,
-                    date_time_end=None,
-                    pickup_address=None,
-                    destination_address=None,
-                    passenger=None,
-                    reported_km=km,
-                )
-            )
-        return RidesExtraction(rows=rows)
+    if debug:
+        print(f"[AIR][DEBUG] ===== {filename} =====")
 
-    # ✅ CAS 2 : Boarding pass (fallback codes aéroport)
+    # ==================================================
+    # CAS 1 : BOARDING PASS TRANSAVIA
+    # ==================================================
+
+    if "TRANSAVIA" in text.upper():
+
+        if debug:
+            print("[AIR][DEBUG] Boarding pass Transavia détecté")
+
+        extraction = extract_transavia_boarding_pass(
+            text,
+            filename,
+            debug=debug,
+        )
+
+        if extraction.rows:
+            return extraction
+
+        if debug:
+            print("[AIR][DEBUG] Transavia : aucun trajet extrait")
+
+    # ==================================================
+    # CAS 2 : DISTANCE DÉCLARÉE (AIR FRANCE)
+    # ==================================================
+
+    matches = PAT_AIR_DISTANCE.findall(text)
+
+    if debug:
+        print("[AIR][DEBUG] distances trouvées:", matches)
+
+    if matches:
+
+        for km_str in matches:
+
+            try:
+                km = float(
+                    km_str.replace(" ", "").replace(",", ".")
+                )
+
+                if km <= 0:
+                    continue
+
+                rows.append(
+                    RideRow(
+                        cheque_or_course=filename,
+                        date_time_start=None,
+                        date_time_end=None,
+                        pickup_address=None,
+                        destination_address=None,
+                        passenger=None,
+                        reported_km=km,
+                    )
+                )
+
+            except (ValueError, TypeError) as e:
+                if debug:
+                    print(
+                        "[AIR][DEBUG] Distance invalide:",
+                        km_str,
+                        e,
+                    )
+
+        if rows:
+            return RidesExtraction(rows=rows)
+
+    # ==================================================
+    # CAS 3 : FALLBACK BOARDING PASS AIR FRANCE
+    # ==================================================
+
     AIRPORT_KM = {
         ("ORY", "TLS"): 570.0,
         ("TLS", "ORY"): 570.0,
@@ -450,26 +571,54 @@ def extract_air_from_pdf_text(text: str, filename: str, debug: bool = False) -> 
         ("TLS", "CDG"): 602.0,
     }
 
-    code_matches = re.findall(r"\b([A-Z]{3})\b", text or "")
-    codes = [c for c in code_matches if c in {"ORY", "TLS", "CDG", "BOD", "MRS", "NCE", "LYS"}]
+    allowed_codes = {
+        "ORY", "TLS", "CDG", "BOD",
+        "MRS", "NCE", "LYS", "PGF",
+    }
+
+    code_matches = re.findall(
+        r"\b([A-Z]{3})\b",
+        text.upper(),
+    )
+
+    codes = [
+        code for code in code_matches
+        if code in allowed_codes
+    ]
 
     if debug:
         print("[AIR][DEBUG] airport codes:", codes)
 
     for i in range(len(codes) - 1):
+
         pair = (codes[i], codes[i + 1])
         km = AIRPORT_KM.get(pair)
-        if km:
-            rows.append(
-                RideRow(
-                    cheque_or_course=filename,
-                    date_time_start=None,
-                    date_time_end=None,
-                    pickup_address=pair[0],
-                    destination_address=pair[1],
-                    passenger=None,
-                    reported_km=km,
-                )
+
+        if km is None:
+            continue
+
+        rows.append(
+            RideRow(
+                cheque_or_course=filename,
+                date_time_start=None,
+                date_time_end=None,
+                pickup_address=pair[0],
+                destination_address=pair[1],
+                passenger=None,
+                reported_km=km,
             )
+        )
+
+        if debug:
+            print(
+                f"[AIR][DEBUG] Trajet détecté : "
+                f"{pair[0]} -> {pair[1]} = {km} km"
+            )
+
+    if debug:
+        print(
+            f"[AIR][DEBUG] Nombre de trajets extraits : "
+            f"{len(rows)}"
+        )
 
     return RidesExtraction(rows=rows)
